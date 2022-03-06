@@ -1,9 +1,9 @@
 library(countrycode)
+library(dplyr)
 library(purrr)
 library(readr)
 library(RSelenium)
-library(XML)
-
+library(rvest)
 
 # before you run RSelenium, you need to pull and open the docker image:
 # sudo docker pull selenium/standalone-firefox
@@ -14,20 +14,16 @@ browser = remoteDriver(port = 4445)
 browser$open()
 
 # extract the table from the website
-get_table = function(browser) {
-  table = 
-    browser$getPageSource() %>%
+save_table = function(browser, country, page) {
+  browser$getPageSource() %>%
     .[[1]] %>%
-    htmlParse %>%
-    readHTMLTable(stringsAsFactors = FALSE) %>%
-    .[["_ctl0_MainContent_TabContainer1_TabPanel1_dgEmployees"]]
-  names(table) = as.character(table[1,])
-  table[-1, ]
+    read_html %>%
+    html_node(css = "#_ctl0_MainContent_TabContainer1_TabPanel1_dgEmployees") %>%
+    html_table(header = TRUE) %>%
+    write_csv(paste0("data/country/", country, " ", page, ".csv"))
 }
 
-searches = list()
-country = "Korea"
-get_country = function(browser, country, load_time = 10) {
+get_first_page = function(browser, country, load_time = 15) {
   message(country)
   browser $
     navigate("http://healtheconomics.tuftsmedicalcenter.org/cear2n/search/search.aspx")
@@ -44,34 +40,43 @@ get_country = function(browser, country, load_time = 10) {
     findElement(using = "css", "#_ctl0_MainContent_TabContainer1_TabPanel1_Button0") $
     clickElement()
   message("Loading page 0")
+  # wait for page to load
   Sys.sleep(load_time)
-  
-  searches[[paste(country, 0)]] <<- get_table(browser)
-  
+}
+
+get_country = function(browser, country, load_time = 15) {
+  get_first_page(browser, country, load_time = load_time)
+  save_table(browser, country, 0)
+
+  # some countries return more than 1 page of results  
   extra_pages = browser$findElements(using = "css", "tr:nth-child(22) a")
   if (length(extra_pages) > 0) {
-    for (i in 1:length(extra_pages)) {
-      extra_pages[[i]]$clickElement()
-      message(paste("Loading page", i))
+    for (page in 1:length(extra_pages)) {
+      # the ith page listed will always refer to the next page plus 1
+      # X 2 3, i = 1 is page 2
+      # 1 X 3, i = 2 is page 3
+      extra_pages[[page]]$clickElement()
+      message(paste("Loading page", page))
+      # wait for the page to load
       Sys.sleep(load_time)
       # now we're on a new page, relist pages
       extra_pages = browser$findElements(using = "css", "tr:nth-child(22) a")
-      # the ith page listed will always refer to the next page
-      # X 2 3, i = 1 is page 2
-      # 1 X 3, i = 2 is page 3
-      searches[[paste(country, i)]] <<- get_table(browser)
+      save_table(browser, country, page, save = save)
     }
   }
 }
 
-# run just once to save all the columns
-get_country(browser, "Sudan")
+# dummy run to set options
+get_first_page(browser, "Sudan")
 # click "Pick Columns to Display(Sort by)"
 browser $
   findElement(using = "css", "a:nth-child(4)") $
   clickElement()
 # click all columns
-walk(browser$findElements(using = "css", "option"), function(column) column$clickElement())
+walk(
+  browser$findElements(using = "css", "option"),
+  function(column) column$clickElement()
+)
 # click "< Add to display list"
 browser $
   findElement(using = "css", ".columnPicker .columnPicker :nth-child(5) input") $
@@ -80,12 +85,20 @@ browser $
 browser $
   findElement(using = "css", "#Submit1") $
   clickElement()
-Sys.sleep(10)
+# wait for page to load
+Sys.sleep(15)
+
+all_countries = codelist$country.name.en
 
 # search the names of all countries
-walk(codelist$country.name.en, function(country) get_country(browser, country))
+# sometimes this will fail part-way through because the server gets overwhelmed
+# to wait a few hours and try again
+walk(all_countries, function(country) get_country(browser, country))
 
-bind_rows(searches) %>%
-  # remove duplicate rows
-  unique %>%
-  write_csv("cost_effectiveness.csv")
+# useful to resume from a certain country
+# so you don't have to start all over
+countries_from = function(all_countries, first_country) {
+  all_countries[-(1:(which(first_country == all_countries)-1))]
+}
+
+browser$close()

@@ -1,0 +1,237 @@
+---
+output:
+  html_document: default
+---
+
+```{r}
+library(countrycode)
+library(dplyr)
+library(fuzzyjoin)
+library(pander)
+library(purrr)
+library(readr)
+library(rnaturalearth)
+library(sf)
+library(stringi)
+library(tidyr)
+library(WDI)
+
+panderOptions("digits", 2)
+```
+
+Spending
+
+```{r}
+GHED_2018 = 
+  read_csv("data/GHED_data.csv") %>%
+  filter(year == 2018)
+
+GHED_codebook = read_csv("data/GHED_codebook.csv")
+
+sectors = 
+  tibble(
+    sector = c(
+      "Domestic Private",
+      "Domestic Government",
+      "External"
+    ),
+    variable_text = c(
+      "Domestic Private Health Expenditure (PVT-D), in million current international $ (PPP)",
+      "Domestic General Government Health Expenditure (GGHE-D), in million current international $ (PPP)",
+      "External Health Expenditure (EXT), in million current international $ (PPP)"
+    )
+  ) %>%
+  # look up the codes corresponding to these variables
+  left_join(
+    GHED_codebook %>%
+      select(
+        variable_code = `Indicator short code`,
+        variable_text = `Indicator name`,
+      )
+  )
+
+sectors %>%
+  group_by(variable_code) %>%
+  summarize(spending = sum(GHED_2018[[variable_code]], na.rm = TRUE)) %>%
+  ungroup %>%
+  # replace variable codes with sectors
+  left_join(sectors) %>%
+  mutate(
+    proportion = spending / sum(spending)
+  ) %>%
+  select(
+    Sector =
+      sector,
+    `Proportion of global 2018 health expenditures, in current international $ (PPP)` =
+      proportion
+  ) %>%
+  pander
+```
+
+```{r}
+# we will need the country codes later for the map
+country_codes = 
+  codelist %>%
+  select(
+    country = country.name.en,
+    country_code = iso2c
+  )
+
+aliases = 
+  country_codes %>%
+  select(-country_code) %>%
+  # we want Taiwan to be part of China to match the World Bank (politics...)
+  filter(country != "Taiwan") %>%
+  mutate(alias = country) %>%
+  # add some alternate names, demonyms, and misspellings
+  bind_rows(read_csv("aliases.csv")) %>%
+  mutate(
+    # add word boundaries
+    whole_alias = paste0("\\b", alias, "\\b")
+  )
+  
+aliases %>%
+  select(
+    Alias = alias,
+    Country = country
+  ) %>%
+  pander
+```
+
+```{r}
+raw_ratios = 
+  tibble(file = list.files("data/countries", full.names = TRUE)) %>%
+  group_by(file) %>%
+  summarize(
+    read_csv(file, col_types = cols(
+      # parse this ourselves later
+      `Article ID` = col_character(),
+      `US$/QALY *` = col_character()
+    ))
+  ) %>%
+  ungroup %>%
+  select(
+    article_id = `Article ID`,
+    year = `Publication Year`,
+    target_population = `Target Population`,
+    raw_CSY = `US$/QALY *`
+  ) %>%
+  filter(
+    # remove mostly empty row at the end of every file
+    # which will either have an article id of 1 or an empty target population
+    !(article_id == 1 | is.na(target_population))
+  ) %>%
+  # remove results duplicated in searches
+  distinct %>%
+  # assign an ID
+  mutate(ratio_id = 1:n())
+
+# match ratios to countries with a fuzzy join
+country_matches =
+  regex_inner_join(
+    raw_ratios,
+    aliases,
+    by = c(target_population = "whole_alias")
+  ) %>%
+  select(ratio_id, country) %>%
+  distinct
+
+match_counts =
+  country_matches %>%
+  # count
+  group_by(ratio_id) %>%
+  summarize(count = n())
+
+# ratios with multiple matching countries
+# manually inspect
+semi_join(
+  raw_ratios,
+  match_counts %>%
+  filter(count > 1)
+) %>%
+  select(
+    `Target population` = target_population,
+  ) %>%
+  pander
+```
+
+```{r}
+# ratios with no matching countries
+# manually inspect
+anti_join(
+  raw_ratios,
+  match_counts
+) %>%
+  select(
+    `Target population` = target_population,
+  ) %>%
+  pander
+```
+
+```{r}
+ratios = 
+  inner_join(
+    raw_ratios %>%
+    select(
+      ratio_id,
+      raw_CSY
+    ),
+    # only keep if they match 1 country
+    semi_join(
+      country_matches,
+      match_counts %>%
+      filter(count == 1)
+    )
+  ) %>%
+  mutate(
+    CSY = as.numeric(ifelse(
+        # ignore non-numeric ratios
+        # \u00A0 = no break space
+        raw_CSY %in% c("Cost-Saving", "Dominated", " ", "\u00A0"),
+        NA, raw_CSY
+      ))
+  ) %>%
+  filter(
+    # must be positive to log
+    # there's very few negative ratios
+    # I'm not sure 0 or negative values make sense anyway?
+    !is.na(CSY) & CSY > 0
+  ) %>%
+  group_by(country) %>%
+  summarize(
+    mean_log_CSY = mean(log(CSY)),
+    number = n()
+  ) %>%
+  ungroup %>%
+  # the mean of the logs is the geometric mean
+  mutate(geometric_mean_CSY = exp(mean_log_CSY))
+
+ratios %>%
+  arrange(desc(geometric_mean_CSY)) %>%
+  mutate(rank = 1:n()) %>%
+  select(
+    Rank = rank,
+    Country = country,
+    `Number of studies` = number,
+    `CSY, 2018 $/QALY` = geometric_mean_CSY
+  ) %>%
+  pander
+```
+
+```{r, dpi=500}
+ne_countries(scale = "small", returnclass = "sf") %>%
+  # equal earth projection
+  st_transform(crs = "+proj=eqearth") %>%
+  select(country_code = iso_a2) %>%
+  inner_join(country_codes) %>%
+  select(-country_code) %>%
+  inner_join(
+    ratios %>%
+    select(
+      country,
+      `Log CSY, 2018 $/QALY` = mean_log_CSY
+    )) %>%
+  .["Log CSY, 2018 $/QALY"] %>%
+  plot(border = NA)
+```
+
