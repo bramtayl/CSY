@@ -51,6 +51,15 @@ sectors =
   )
 
 sectors %>%
+  select(
+    Sector = sector,
+    `Full name` = variable_text
+  ) %>%
+  pander
+```
+
+```{r}
+sectors %>%
   group_by(variable_code) %>%
   summarize(spending = sum(GHED_2018[[variable_code]], na.rm = TRUE)) %>%
   ungroup %>%
@@ -75,21 +84,18 @@ country_codes =
   select(
     country = country.name.en,
     country_code = iso2c
-  )
-
-aliases = 
-  country_codes %>%
-  select(-country_code) %>%
+  ) %>%
   # we want Taiwan to be part of China to match the World Bank (politics...)
-  filter(country != "Taiwan") %>%
-  mutate(alias = country) %>%
-  # add some alternate names, demonyms, and misspellings
-  bind_rows(read_csv("aliases.csv")) %>%
-  mutate(
-    # add word boundaries
-    whole_alias = paste0("\\b", alias, "\\b")
-  )
-  
+  filter(country != "Taiwan")
+
+country_codes %>%
+  select(Country = country) %>%
+  pander
+```
+
+```{r}
+aliases = read_csv("aliases.csv")
+
 aliases %>%
   select(
     Alias = alias,
@@ -99,6 +105,17 @@ aliases %>%
 ```
 
 ```{r}
+all_aliases =
+  country_codes %>%
+  select(-country_code) %>%
+  mutate(alias = country) %>%
+  # add some alternate names, demonyms, and misspellings
+  bind_rows(aliases) %>%
+  mutate(
+    # add word boundaries
+    whole_alias = paste0("\\b", alias, "\\b")
+  )
+
 raw_ratios = 
   tibble(file = list.files("data/countries", full.names = TRUE)) %>%
   group_by(file) %>%
@@ -130,7 +147,7 @@ raw_ratios =
 country_matches =
   regex_inner_join(
     raw_ratios,
-    aliases,
+    all_aliases,
     by = c(target_population = "whole_alias")
   ) %>%
   select(ratio_id, country) %>%
@@ -152,6 +169,7 @@ semi_join(
   select(
     `Target population` = target_population,
   ) %>%
+  distinct %>%
   pander
 ```
 
@@ -165,6 +183,7 @@ anti_join(
   select(
     `Target population` = target_population,
   ) %>%
+  distinct %>%
   pander
 ```
 
