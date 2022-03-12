@@ -123,13 +123,21 @@ raw_ratios =
     read_csv(file, col_types = cols(
       # parse this ourselves later
       `Article ID` = col_character(),
-      `US$/QALY *` = col_character()
+      `Publication Year` = col_character(),
+      `Reference` = col_character(),
+      `US$/QALY *` = col_character(),
+      `Ratio Description` = col_character(),
+      `PubMed ID` = col_character(),
+      `Target Population` = col_character(),
+      `Intervention Description` = col_character(),
+      Title = col_character(),
+      `Comparator Description` = col_character(),
+      Impact = col_character(),
     ))
   ) %>%
   ungroup %>%
   select(
     article_id = `Article ID`,
-    year = `Publication Year`,
     target_population = `Target Population`,
     raw_CSY = `US$/QALY *`
   ) %>%

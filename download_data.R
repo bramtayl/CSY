@@ -20,7 +20,7 @@ save_table = function(browser, country, page) {
     read_html %>%
     html_node(css = "#_ctl0_MainContent_TabContainer1_TabPanel1_dgEmployees") %>%
     html_table(header = TRUE) %>%
-    write_csv(paste0("data/country/", country, " ", page, ".csv"))
+    write_csv(paste0("data/countries/", country, " ", page, ".csv"))
 }
 
 get_first_page = function(browser, country, load_time = 15) {
@@ -61,7 +61,7 @@ get_country = function(browser, country, load_time = 15) {
       Sys.sleep(load_time)
       # now we're on a new page, relist pages
       extra_pages = browser$findElements(using = "css", "tr:nth-child(22) a")
-      save_table(browser, country, page, save = save)
+      save_table(browser, country, page)
     }
   }
 }
@@ -69,6 +69,7 @@ get_country = function(browser, country, load_time = 15) {
 # dummy run to set options
 get_first_page(browser, "Sudan")
 # click "Pick Columns to Display(Sort by)"
+
 browser $
   findElement(using = "css", "a:nth-child(4)") $
   clickElement()
@@ -95,10 +96,15 @@ all_countries = codelist$country.name.en
 # to wait a few hours and try again
 walk(all_countries, function(country) get_country(browser, country))
 
+browser$close()
+
 # useful to resume from a certain country
 # so you don't have to start all over
-countries_from = function(all_countries, first_country) {
-  all_countries[-(1:(which(first_country == all_countries)-1))]
+# for example
+# walk(from(all_countries, "St. Lucia"), function(country) get_country(browser, country))
+from = function(all_countries, first_country) { # nolint
+  all_countries[which(first_country == all_countries):length(all_countries)]
 }
 
-browser$close()
+# To debug
+# browser$screenshot(display = TRUE, useViewer = FALSE)
